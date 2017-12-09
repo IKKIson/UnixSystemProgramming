@@ -5,6 +5,9 @@
 #include<arpa/inet.h>
 #include<string.h>
 #include<sys/wait.h>
+#include<string.h>
+#include<sys/msg.h>
+
 #define BUF_SIZE 30
 
 void error_handling(char *message);
@@ -28,7 +31,20 @@ int main(int argc ,char* argv[])
         char msgbuf[BUF_SIZE];
         char filename[BUF_SIZE];
         int i=0, msg_len;
+	
+	//Message Queue value set
+	key_t key;
+	int msgid;
 
+	//Message Queue Set Init
+	key = ftok("keyfile", 1);
+	msgid = msgget(key, IPC_CREAT|666);
+	if(msgid == -1){
+		perror("msgget");
+		exit(1);
+	}	
+	
+	//Check port num for socket
 	if(argc !=2)
 	{
 		printf("Usage: %s<port>\n",argv[0]);
@@ -50,9 +66,8 @@ int main(int argc ,char* argv[])
 		error_handling("bind() error!");
 	if(listen(serv_sock,5)==-1)
 		error_handling("listen() error!");
-
-	pipe(fds1);
-	pipe(fds2);
+	//pipe(fds1);
+	//pipe(fds2);
 	
 
 	while(1)
@@ -66,15 +81,15 @@ int main(int argc ,char* argv[])
 			puts("new client connected...");
 		
 		/* 
-			process A
+			process parent
 			pipe index
 				1 : write to other process
 				0 : read from other process
-			fds1[0] : write to process B
-			fds2[1] : read from process B
+			fds1[0] : write to process child
+			fds2[1] : read from process child
 		*/
 		pid= fork();
-		if(pid==0)
+		if(pid != 0) 
 		{
 			printf("Insert File Name : ");
 			scanf("%s",filename);
@@ -92,17 +107,28 @@ int main(int argc ,char* argv[])
 				4.2. (for loop)if get msg 10 count
 					end of loop 
 			*/
-				msg_len = read(fds1[0],msgbuf,BUF_SIZE);
+				//msg_len = read(fds1[0],msgbuf,BUF_SIZE);
+				msg_len = msgrcv(msgid, msgbuf, BUF_SIZE, 0, 0);
 				msgbuf[msg_len]=0;
+				printf("Get Message from pc : %s\n",msgbuf);
 				fwrite((void*)msgbuf,1,msg_len,fp);
 				
 				if(!strcmp(msgbuf,"q\n") || !strcmp(msgbuf,"Q\n"))
 				{
-					write(fds2[1],msgbuf,msg_len);
+					//write(fds2[1],msgbuf,msg_len);
+					if(msgsnd(msgid, (void *)msgbuf, BUF_SIZE, IPC_NOWAIT) == -1){
+                                       		perror("msegsnd");
+                                        	exit(1);
+                                	}
 					break;
 				}
-				else
-					write(fds2[1],msgbuf,msg_len);
+				else {
+					//write(fds2[1],msgbuf,msg_len);
+					if(msgsnd(msgid, (void *)msgbuf, BUF_SIZE, IPC_NOWAIT) == -1){
+                                        	perror("msegsnd");
+                                        	exit(1);
+                                	}
+				}
 				
 			}
 			fclose(fp);
@@ -110,15 +136,14 @@ int main(int argc ,char* argv[])
 		}
 		
 		/* 
-			process B
+			process child
 			pipe index
 				1 : write to other process
 				0 : read from other process
-			fds1[1] : write to process A
-			fds2[0] : read from process A
+			fds1[1] : write to process parent
+			fds2[0] : read from process parent
 		*/
-		pid = fork();
-		if(pid==0)
+		else if(pid == 0)
 		{
 			close(serv_sock);
 			while((str_len=read(clnt_sock, buf, BUF_SIZE))!=0)
@@ -134,9 +159,15 @@ int main(int argc ,char* argv[])
 				memset(msgbuf,0,sizeof(msgbuf));
 				strcpy(msgbuf,buf);
 				msgbuf[str_len]=0;
-				write(fds1[1],msgbuf,str_len);
+				//write(fds1[1],msgbuf,str_len);
+				if(msgsnd(msgid, (void *)msgbuf, BUF_SIZE, IPC_NOWAIT) == -1){
+					perror("msegsnd");
+					exit(1);
+				}				
+
 				memset(msgbuf,0,sizeof(msgbuf));
 				read(fds2[0],msgbuf,BUF_SIZE);
+				
 				i++;
 
 				//printf("check in Process B i = %d\n", i);
@@ -152,6 +183,7 @@ int main(int argc ,char* argv[])
 					break;
 				}
 				write(clnt_sock,msgbuf,str_len);
+				memset(msgbuf, 0, sizeof(msgbuf));
 			}
 			
 		close(clnt_sock);
